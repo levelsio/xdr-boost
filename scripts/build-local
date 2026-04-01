@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build}"
+BINARY_NAME="${BINARY_NAME:-xdr-boost}"
+OUTPUT_PATH="$BUILD_DIR/$BINARY_NAME"
+ARCHS_RAW="${ARCHS:-$(/usr/bin/uname -m)}"
+read -r -a ARCHS <<<"$ARCHS_RAW"
+SDKROOT="${SDKROOT:-$(/usr/bin/xcrun --sdk macosx --show-sdk-path)}"
+MIN_MACOS_VERSION="${MIN_MACOS_VERSION:-12.0}"
+
+mkdir -p "$BUILD_DIR"
+
+compile_arch() {
+  local arch="$1"
+  local arch_output_dir="$BUILD_DIR/$arch"
+  local arch_output_path="$arch_output_dir/$BINARY_NAME"
+
+  mkdir -p "$arch_output_dir"
+
+  /usr/bin/xcrun --sdk macosx swiftc \
+    -O \
+    -target "$arch-apple-macos$MIN_MACOS_VERSION" \
+    -sdk "$SDKROOT" \
+    -o "$arch_output_path" \
+    "$ROOT_DIR/Sources/main.swift" \
+    -framework Cocoa \
+    -framework MetalKit \
+    -framework Metal
+
+  printf '%s\n' "$arch_output_path"
+}
+
+if [[ "${#ARCHS[@]}" -eq 1 ]]; then
+  single_output="$(compile_arch "${ARCHS[0]}")"
+  /bin/cp "$single_output" "$OUTPUT_PATH"
+else
+  arch_outputs=()
+  for arch in "${ARCHS[@]}"; do
+    arch_outputs+=("$(compile_arch "$arch")")
+  done
+
+  /usr/bin/lipo -create -output "$OUTPUT_PATH" "${arch_outputs[@]}"
+fi
+
+printf '%s\n' "$OUTPUT_PATH"

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
+APP_NAME="${APP_NAME:-XDR Boost}"
+APP_PATH="${APP_PATH:-$DIST_DIR/$APP_NAME.app}"
+VOLUME_NAME="${VOLUME_NAME:-XDR Boost}"
+
+raw_version="${VERSION:-$(git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")}"
+version="${raw_version#v}"
+DMG_PATH="${DMG_PATH:-$DIST_DIR/xdr-boost-$version-macos.dmg}"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/xdr-boost-dmg.XXXXXX")"
+SKIP_APP_REBUILD="${SKIP_APP_REBUILD:-0}"
+
+cleanup() {
+  rm -rf "$STAGING_DIR"
+}
+trap cleanup EXIT
+
+if [[ "$SKIP_APP_REBUILD" != "1" || ! -d "$APP_PATH" ]]; then
+  "$ROOT_DIR/scripts/package-app" >/dev/null
+fi
+
+rm -f "$DMG_PATH"
+ditto "$APP_PATH" "$STAGING_DIR/$APP_NAME.app"
+ln -s /Applications "$STAGING_DIR/Applications"
+
+hdiutil create \
+  -volname "$VOLUME_NAME" \
+  -srcfolder "$STAGING_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH" >/dev/null
+
+printf '%s\n' "$DMG_PATH"

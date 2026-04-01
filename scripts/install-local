@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
+APP_NAME="${APP_NAME:-XDR Boost}"
+APP_PATH="${APP_PATH:-$DIST_DIR/$APP_NAME.app}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/Applications}"
+SKIP_APP_REBUILD="${SKIP_APP_REBUILD:-0}"
+
+if [[ "$SKIP_APP_REBUILD" != "1" || ! -d "$APP_PATH" ]]; then
+  "$ROOT_DIR/scripts/package-app" >/dev/null
+fi
+
+mkdir -p "$INSTALL_DIR"
+rm -rf "$INSTALL_DIR/$APP_NAME.app"
+ditto "$APP_PATH" "$INSTALL_DIR/$APP_NAME.app"
+
+printf '%s\n' "$INSTALL_DIR/$APP_NAME.app"

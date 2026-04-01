@@ -1,13 +1,24 @@
 PREFIX ?= /usr/local
 BINARY = xdr-boost
 BUILD_DIR = .build
+DIST_DIR = dist
 
-.PHONY: build install uninstall clean launch-agent remove-agent
+.PHONY: build app dmg release install-local install uninstall clean launch-agent remove-agent
 
 build:
-	@mkdir -p $(BUILD_DIR)
-	swiftc -O -o $(BUILD_DIR)/$(BINARY) Sources/main.swift \
-		-framework Cocoa -framework MetalKit -framework Metal
+	@./scripts/build-local
+
+app:
+	@VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" ARCHS="$(ARCHS)" BUILD_DIR="$(PWD)/$(BUILD_DIR)" DIST_DIR="$(PWD)/$(DIST_DIR)" ./scripts/package-app
+
+dmg:
+	@VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" ARCHS="$(ARCHS)" BUILD_DIR="$(PWD)/$(BUILD_DIR)" DIST_DIR="$(PWD)/$(DIST_DIR)" ./scripts/package-dmg
+
+release:
+	@VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" ARCHS="$(ARCHS)" NOTARY_PROFILE="$(NOTARY_PROFILE)" BUILD_ROOT="$(PWD)/build/release/direct" ./scripts/release-direct.sh
+
+install-local:
+	@VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" ARCHS="$(ARCHS)" BUILD_DIR="$(PWD)/$(BUILD_DIR)" DIST_DIR="$(PWD)/$(DIST_DIR)" ./scripts/install-local
 
 install: build
 	install -d $(PREFIX)/bin
@@ -29,4 +40,4 @@ remove-agent:
 	rm -f ~/Library/LaunchAgents/com.xdr-boost.agent.plist
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(DIST_DIR) build
