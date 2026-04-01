@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to embed in the app bundle and DMG filename
+        required: false
+        type: string
+
+jobs:
+  macos-release:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${RELEASE_TAG:-${INPUT_VERSION:-0.0.0-dev}}"
+          version="${version#refs/tags/}"
+          version="${version#v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "APP_PATH=build/release/direct/export/XDR Boost.app" >> "$GITHUB_ENV"
+          echo "DMG_PATH=build/release/direct/export/xdr-boost-$version-macos.dmg" >> "$GITHUB_ENV"
+
+      - name: Validate release secrets
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+        run: |
+          for key in \
+            APPLE_CERTIFICATE_P12_BASE64 \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_DEVELOPER_IDENTITY \
+            APPLE_NOTARY_APPLE_ID \
+            APPLE_NOTARY_PASSWORD \
+            APPLE_NOTARY_TEAM_ID
+          do
+            if [[ -z "${!key}" ]]; then
+              echo "Missing required release secret: $key" >&2
+              exit 1
+            fi
+          done
+
+      - name: Import Developer ID certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Build signed release artifacts
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+        run: make release VERSION="$VERSION" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ARCHS="arm64 x86_64"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdr-boost-${{ env.VERSION }}-macos
+          path: |
+            ${{ env.APP_PATH }}
+            ${{ env.DMG_PATH }}
+          if-no-files-found: error
+
+      - name: Attach DMG to GitHub release
+        if: ${{ github.event_name == 'release' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.DMG_PATH }}

@@ -205,12 +205,15 @@ class XDRApp: NSObject, NSApplicationDelegate {
     }
 
     @objc func setBoostLevel(_ sender: NSMenuItem) {
-        boostLevel = Double(sender.tag) / 100.0
+        boostLevel = min(Double(sender.tag) / 100.0, Double(maxEDR))
         for item in boostItems {
             item.state = (item.tag == sender.tag) ? .on : .off
         }
         if isActive {
             deactivate()
+            activate()
+        } else {
+            shouldBeActive = true
             activate()
         }
     }

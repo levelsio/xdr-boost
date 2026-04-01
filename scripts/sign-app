@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
+APP_NAME="${APP_NAME:-XDR Boost}"
+APP_PATH="${1:-${APP_PATH:-$DIST_DIR/$APP_NAME.app}}"
+source "$ROOT_DIR/scripts/common-signing.sh"
+
+IDENTITY="${CODESIGN_IDENTITY:-${SIGNING_IDENTITY:-}}"
+if [[ -z "$IDENTITY" ]]; then
+  IDENTITY="$(choose_local_signing_identity)"
+fi
+
+if [[ ! -d "$APP_PATH" ]]; then
+  echo "App bundle not found: $APP_PATH" >&2
+  exit 1
+fi
+
+if [[ "$IDENTITY" == "-" ]]; then
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    /usr/bin/codesign --force --sign - "$item"
+  done < <(signable_children_for_bundle "$APP_PATH")
+
+  /usr/bin/codesign --force --sign - "$APP_PATH"
+else
+  /usr/bin/xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$item"
+  done < <(signable_children_for_bundle "$APP_PATH")
+
+  /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP_PATH"
+fi
+
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH" >/dev/null
+printf '%s\n' "$APP_PATH"

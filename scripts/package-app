@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build}"
+DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
+BINARY_NAME="${BINARY_NAME:-xdr-boost}"
+APP_NAME="${APP_NAME:-XDR Boost}"
+BUNDLE_ID="${BUNDLE_ID:-com.xdrboost.app}"
+APP_PATH="${APP_PATH:-$DIST_DIR/$APP_NAME.app}"
+BINARY_SOURCE_PATH="${BINARY_SOURCE_PATH:-$BUILD_DIR/$BINARY_NAME}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
+
+raw_version="${VERSION:-$(git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")}"
+version="${raw_version#v}"
+build_number="${BUILD_NUMBER:-${GITHUB_RUN_NUMBER:-1}}"
+
+if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+  bundle_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+elif [[ "$version" =~ ^([0-9]+)\.([0-9]+) ]]; then
+  bundle_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.0"
+elif [[ "$version" =~ ^([0-9]+) ]]; then
+  bundle_version="${BASH_REMATCH[1]}.0.0"
+else
+  bundle_version="0.0.0"
+fi
+
+if [[ "$SKIP_BUILD" != "1" || ! -f "$BINARY_SOURCE_PATH" ]]; then
+  "$ROOT_DIR/scripts/build-local" >/dev/null
+fi
+
+rm -rf "$APP_PATH"
+mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
+
+/bin/cp "$BINARY_SOURCE_PATH" "$APP_PATH/Contents/MacOS/$BINARY_NAME"
+chmod 755 "$APP_PATH/Contents/MacOS/$BINARY_NAME"
+
+cat > "$APP_PATH/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleExecutable</key>
+  <string>$BINARY_NAME</string>
+  <key>CFBundleIdentifier</key>
+  <string>$BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$bundle_version</string>
+  <key>CFBundleVersion</key>
+  <string>$build_number</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+</dict>
+</plist>
+EOF
+
+printf 'APPL????' > "$APP_PATH/Contents/PkgInfo"
+printf '%s\n' "$APP_PATH"

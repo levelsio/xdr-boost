@@ -37,6 +37,33 @@ make build
 
 The binary will be at `.build/xdr-boost`.
 
+### Build a Mac app bundle
+
+```bash
+make app
+```
+
+The app bundle will be at `dist/XDR Boost.app`.
+
+### Build a DMG
+
+```bash
+make dmg
+```
+
+The disk image will be at `dist/xdr-boost-<version>-macos.dmg`.
+
+### Build a Production-Signed Release
+
+If you have a local `Developer ID Application` certificate and a configured `notarytool` keychain profile:
+
+```bash
+NOTARY_PROFILE=YourNotaryProfile make release VERSION=0.1.0 BUILD_NUMBER=1
+```
+
+This produces a universal macOS app bundle plus a Developer ID signed, notarized, and stapled DMG under `build/release/direct/export/`.
+The GitHub release workflow uses the same release script and expects the Apple signing/notarization secrets to be present.
+
 ### Install to PATH
 
 ```bash
