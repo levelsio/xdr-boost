@@ -154,6 +154,7 @@ class XDRApp: NSObject, NSApplicationDelegate {
     func observeSleepWake() {
         let ws = NSWorkspace.shared.notificationCenter
         let nc = NotificationCenter.default
+        let dnc = DistributedNotificationCenter.default()
 
         ws.addObserver(self, selector: #selector(handleSleep),
                        name: NSWorkspace.willSleepNotification, object: nil)
@@ -165,6 +166,12 @@ class XDRApp: NSObject, NSApplicationDelegate {
                        name: NSWorkspace.screensDidWakeNotification, object: nil)
         nc.addObserver(self, selector: #selector(handleDisplayChange),
                        name: NSApplication.didChangeScreenParametersNotification, object: nil)
+
+        // Screen lock/unlock — the lock screen kills our overlay
+        dnc.addObserver(self, selector: #selector(handleScreenLocked),
+                        name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(handleScreenUnlocked),
+                        name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
     }
 
     @objc func handleSleep() {
@@ -175,11 +182,31 @@ class XDRApp: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func handleWake() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+    @objc func handleScreenLocked() {
+        wasActiveBeforeSleep = isActive
+        if isActive {
+            deactivate()
+            fputs("Screen locked — XDR paused\n", stderr)
+        }
+    }
+
+    @objc func handleScreenUnlocked() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self = self else { return }
             self.maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
             if self.wasActiveBeforeSleep && self.maxEDR > 1.0 {
+                self.activate()
+                fputs("Screen unlocked — XDR restored\n", stderr)
+            }
+        }
+    }
+
+    @objc func handleWake() {
+        // Wake without lock screen — restore immediately
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self = self else { return }
+            self.maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+            if self.wasActiveBeforeSleep && self.maxEDR > 1.0 && !self.isActive {
                 self.activate()
                 fputs("Wake — XDR restored\n", stderr)
             }
