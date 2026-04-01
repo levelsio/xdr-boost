@@ -62,7 +62,7 @@ Click the **☀** icon in your menu bar to:
 
 ### Keyboard shortcut
 
-**Ctrl+Shift+B** — toggle XDR brightness on/off from anywhere, no need to find the menu bar icon.
+**Cmd+Shift+B** — toggle XDR brightness on/off from anywhere, no need to find the menu bar icon.
 
 ### Emergency kill
 
