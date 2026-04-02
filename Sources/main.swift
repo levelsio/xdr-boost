@@ -1,6 +1,7 @@
 import Cocoa
 import MetalKit
 import Carbon.HIToolbox
+import ServiceManagement
 
 // MARK: - Kill switch: `xdr-boost --kill` terminates any running instance
 if CommandLine.arguments.contains("--kill") || CommandLine.arguments.contains("-k") {
@@ -47,7 +48,12 @@ class XDRApp: NSObject, NSApplicationDelegate {
 
     var toggleItem: NSMenuItem!
     var shortcutItem: NSMenuItem!
+    var loginItem: NSMenuItem!
     var boostItems: [NSMenuItem] = []
+
+    var isRunningAsApp: Bool {
+        Bundle.main.bundlePath.hasSuffix(".app")
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let dev = MTLCreateSystemDefaultDevice() else {
@@ -139,6 +145,16 @@ class XDRApp: NSObject, NSApplicationDelegate {
             item.state = (level == boostLevel) ? .on : .off
             menu.addItem(item)
             boostItems.append(item)
+        }
+
+        if isRunningAsApp {
+            menu.addItem(NSMenuItem.separator())
+            loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
+            loginItem.target = self
+            if #available(macOS 13.0, *) {
+                loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            }
+            menu.addItem(loginItem)
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -271,6 +287,21 @@ class XDRApp: NSObject, NSApplicationDelegate {
         statusItem.button?.title = "☀"
         toggleItem.title = "Turn On"
         fputs("XDR OFF\n", stderr)
+    }
+
+    @objc func toggleLoginItem() {
+        if #available(macOS 13.0, *) {
+            do {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                } else {
+                    try SMAppService.mainApp.register()
+                }
+            } catch {
+                fputs("Login item toggle failed: \(error)\n", stderr)
+            }
+            loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        }
     }
 
     @objc func quit() {

@@ -29,29 +29,41 @@ xdr-boost creates an invisible Metal overlay using `multiply` compositing with E
 
 ## Install
 
+### Download (recommended)
+
+1. Download `XDR-Boost.dmg` from [Releases](https://github.com/levelsio/xdr-boost/releases)
+2. Open the DMG and drag **XDR Boost** to **Applications**
+3. Open **XDR Boost** from Applications
+4. First time: right-click > Open, then click Open in the dialog
+5. Click the **☀** menu bar icon > **Start at Login** to auto-start on login
+
+### Build from source
+
 ```bash
 git clone https://github.com/levelsio/xdr-boost.git
 cd xdr-boost
+make app
+```
+
+The app will be at `.build/XDR Boost.app`. To create a DMG:
+
+```bash
+make dmg
+```
+
+### CLI install (advanced)
+
+```bash
 make build
-```
-
-The binary will be at `.build/xdr-boost`.
-
-### Install to PATH
-
-```bash
 sudo make install
-```
-
-### Start on login
-
-```bash
-sudo make install
-make launch-agent
+make launch-agent   # auto-start on login
 ```
 
 ### Uninstall
 
+**App:** Delete from Applications and remove from System Settings > General > Login Items.
+
+**CLI:**
 ```bash
 make remove-agent
 sudo make uninstall
