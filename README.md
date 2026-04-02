@@ -9,6 +9,7 @@ Unlocks the full brightness of your Liquid Retina XDR display beyond the standar
 - Boosts screen brightness beyond the standard 500 nit SDR limit using XDR hardware
 - No white tint or washed-out colors — uses multiply compositing to preserve colors perfectly
 - Menu bar icon with brightness presets (1.5x, 2.0x, 3.0x, 4.0x)
+- Automation rules for Light/Dark Mode and custom daily time windows
 - Global keyboard shortcut (**Cmd+Shift+B**) to toggle from anywhere
 - Survives sleep/wake, lid close/open, and lock/unlock — brightness auto-restores
 - Starts with XDR off — rebooting always gives you a normal screen
@@ -70,6 +71,7 @@ xdr-boost 3.0
 Click the **☀** icon in your menu bar to:
 - Toggle XDR brightness on/off
 - Choose brightness level (1.5x, 2.0x, 3.0x, 4.0x)
+- Configure automation rules for system appearance or a daily schedule
 - Quit
 
 ### Keyboard shortcut
@@ -88,7 +90,18 @@ xdr-boost --kill
 pkill xdr-boost
 ```
 
-The app always starts with XDR **off** — you have to manually turn it on. So rebooting will always give you a normal screen.
+The app starts with XDR **off** when automation is disabled. If automation is enabled and the current conditions match, XDR can turn on automatically at launch.
+
+### Automation
+
+Open **Automation Settings...** from the menu bar to configure:
+
+- **System Appearance**: turn XDR on only in **Light Mode** or only in **Dark Mode**
+- **Time Window**: turn XDR on only during a custom daily time range
+
+If you enable both, **both conditions must match** before XDR turns on.
+
+Automation is checked continuously while the app is running, including after sleep/wake and display changes. Manual toggles still work, but automation will re-apply the configured state on the next check.
 
 ### Sleep, lid close, and lock screen
 
