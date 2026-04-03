@@ -4,14 +4,24 @@ import Carbon.HIToolbox
 
 // MARK: - Kill switch: `xdr-boost --kill` terminates any running instance
 if CommandLine.arguments.contains("--kill") || CommandLine.arguments.contains("-k") {
+    let myPID = ProcessInfo.processInfo.processIdentifier
     let pipe = Pipe()
     let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
     proc.arguments = ["-f", "xdr-boost"]
     proc.standardOutput = pipe
-    proc.standardError = pipe
+    proc.standardError = Pipe()
     try? proc.run()
     proc.waitUntilExit()
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    if let output = String(data: data, encoding: .utf8) {
+        for line in output.split(separator: "\n") {
+            if let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid != myPID {
+                kill(pid, SIGTERM)
+            }
+        }
+    }
     fputs("All xdr-boost instances killed\n", stderr)
     exit(0)
 }
@@ -31,6 +41,13 @@ class Renderer: NSObject, MTKViewDelegate {
         buf.commit()
     }
 }
+
+// Use a high window level that avoids macOS special-casing of .screenSaver during
+// Mission Control, while still sitting above all normal app windows and panels.
+// .screenSaver (1000) triggers window hiding/reordering during Mission Control and
+// can interfere with cursor compositing. Level 200 is well above .popUpMenu (101)
+// but safely below any system-reserved levels.
+private let kOverlayWindowLevel = NSWindow.Level(rawValue: 200)
 
 class XDRApp: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -65,7 +82,7 @@ class XDRApp: NSObject, NSApplicationDelegate {
 
         setupStatusBar()
         registerGlobalHotkey()
-        observeSleepWake()
+        observeSystemEvents()
         fputs("XDR Boost ready — click menu bar icon or press Ctrl+Option+Cmd+V to toggle\n", stderr)
         fputs("Emergency kill: run `xdr-boost --kill` or press Ctrl+Option+Cmd+V\n", stderr)
         fputs("Max EDR: \(maxEDR)x\n", stderr)
@@ -150,33 +167,114 @@ class XDRApp: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    // MARK: - Watchdog & Display Changes
+    // MARK: - System Event Observers
 
-    func observeSleepWake() {
+    func observeSystemEvents() {
+        let nc = NotificationCenter.default
+        let wnc = NSWorkspace.shared.notificationCenter
+
         // Display config changed (resolution, arrangement, external monitors)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleDisplayChange),
-            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        nc.addObserver(self, selector: #selector(handleDisplayChange),
+                       name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
-        // Watchdog: every 3 seconds, check if XDR should be on but overlay is dead
-        // This handles sleep/wake, lid close/open, lock/unlock — all of them
-        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            guard let self = self, self.shouldBeActive else { return }
+        // Space / Mission Control changes — fires when exiting Mission Control or switching spaces
+        wnc.addObserver(self, selector: #selector(handleSpaceChange),
+                        name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
 
-            if let window = self.overlayWindow {
-                // Window exists — just make sure it's visible and in front
-                if !window.isVisible {
-                    window.orderFrontRegardless()
-                    fputs("Watchdog — window restored\n", stderr)
+        // Screen sleep/wake — EDR headroom resets after wake
+        wnc.addObserver(self, selector: #selector(handleScreenWake),
+                        name: NSWorkspace.screensDidWakeNotification, object: nil)
+
+        // Watchdog: every 1.5 seconds, verify overlay health and track EDR headroom changes
+        // (handles brightness keyboard adjustments, sleep/wake, lid close/open, lock/unlock)
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            self?.watchdogCheck()
+        }
+    }
+
+    func watchdogCheck() {
+        // Track EDR headroom changes from keyboard brightness controls
+        let currentMaxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+        if currentMaxEDR != maxEDR {
+            let oldMax = maxEDR
+            maxEDR = currentMaxEDR
+            fputs("EDR headroom changed: \(oldMax)x → \(maxEDR)x\n", stderr)
+
+            // Clamp boost level if it now exceeds available headroom
+            if boostLevel > Double(maxEDR) && maxEDR > 1.0 {
+                boostLevel = Double(maxEDR)
+                updateBoostMenuState()
+                if isActive, let view = boostView {
+                    view.clearColor = MTLClearColor(red: boostLevel, green: boostLevel, blue: boostLevel, alpha: 1.0)
+                    fputs("Boost clamped to \(boostLevel)x\n", stderr)
                 }
-            } else {
-                // Window is gone (nil) — need to fully recreate
-                self.isActive = false
-                self.maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
-                if self.maxEDR > 1.0 {
-                    self.activate()
-                    fputs("Watchdog — XDR recreated\n", stderr)
-                }
+            }
+        }
+
+        guard shouldBeActive else { return }
+
+        // EDR no longer available (brightness too low or display changed)
+        if maxEDR <= 1.0 {
+            if isActive {
+                deactivate()
+                fputs("Watchdog — EDR unavailable, deactivated\n", stderr)
+            }
+            return
+        }
+
+        if let window = overlayWindow {
+            // Window exists — make sure it's visible and correctly sized
+            if !window.isVisible {
+                window.orderFrontRegardless()
+                fputs("Watchdog — window restored\n", stderr)
+            }
+            if let screen = NSScreen.main, window.frame != screen.frame {
+                window.setFrame(screen.frame, display: true)
+                fputs("Watchdog — resized to match screen\n", stderr)
+            }
+        } else {
+            // Window is gone — need to fully recreate
+            isActive = false
+            if maxEDR > 1.0 {
+                activate()
+                fputs("Watchdog — XDR recreated\n", stderr)
+            }
+        }
+    }
+
+    @objc func handleSpaceChange() {
+        guard shouldBeActive else { return }
+        // Short delay to let Mission Control / space switch animation finish
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.reassertOverlay()
+        }
+    }
+
+    @objc func handleScreenWake() {
+        guard shouldBeActive else { return }
+        // Delay to let the display fully wake and report correct EDR values
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            self.maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+            self.reassertOverlay()
+        }
+    }
+
+    /// Re-assert the overlay window after system events (Mission Control, space change, wake).
+    /// Recreates it if it was destroyed, otherwise ensures it's visible and correctly sized.
+    func reassertOverlay() {
+        guard shouldBeActive else { return }
+        if let window = overlayWindow {
+            if let screen = NSScreen.main {
+                window.setFrame(screen.frame, display: false)
+            }
+            window.orderFrontRegardless()
+        } else {
+            isActive = false
+            maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+            if maxEDR > 1.0 {
+                activate()
+                fputs("Overlay reasserted\n", stderr)
             }
         }
     }
@@ -208,12 +306,17 @@ class XDRApp: NSObject, NSApplicationDelegate {
 
     @objc func setBoostLevel(_ sender: NSMenuItem) {
         boostLevel = Double(sender.tag) / 100.0
-        for item in boostItems {
-            item.state = (item.tag == sender.tag) ? .on : .off
-        }
+        updateBoostMenuState()
         if isActive, let view = boostView {
             // Update in-place — no teardown, no flash
             view.clearColor = MTLClearColor(red: boostLevel, green: boostLevel, blue: boostLevel, alpha: 1.0)
+        }
+    }
+
+    func updateBoostMenuState() {
+        let currentTag = Int(boostLevel * 100)
+        for item in boostItems {
+            item.state = (item.tag == currentTag) ? .on : .off
         }
     }
 
@@ -224,14 +327,15 @@ class XDRApp: NSObject, NSApplicationDelegate {
 
         let frame = screen.frame
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.level = .screenSaver
+        window.level = kOverlayWindowLevel
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.hidesOnDeactivate = false
         window.sharingType = .none  // exclude from screenshots and screen recordings
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        window.animationBehavior = .none  // prevent animation glitches during Mission Control
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
 
         // Single MTKView that both triggers EDR and provides the boost
         let boostView = MTKView(frame: frame, device: device)
