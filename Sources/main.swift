@@ -18,6 +18,7 @@ if CommandLine.arguments.contains("--kill") || CommandLine.arguments.contains("-
 
 class Renderer: NSObject, MTKViewDelegate {
     var commandQueue: MTLCommandQueue
+    var onFirstFrame: (() -> Void)?
     init(device: MTLDevice) { self.commandQueue = device.makeCommandQueue()! }
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
     func draw(in view: MTKView) {
@@ -27,6 +28,12 @@ class Renderer: NSObject, MTKViewDelegate {
         enc.endEncoding()
         if let drawable = view.currentDrawable {
             buf.present(drawable)
+        }
+        if let callback = onFirstFrame {
+            onFirstFrame = nil
+            buf.addCompletedHandler { _ in
+                DispatchQueue.main.async { callback() }
+            }
         }
         buf.commit()
     }
@@ -183,13 +190,15 @@ class XDRApp: NSObject, NSApplicationDelegate {
 
     @objc func handleDisplayChange() {
         maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
-        if isActive {
-            deactivate()
-            if maxEDR > 1.0 && shouldBeActive {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.activate()
-                    fputs("Display changed — XDR refreshed\n", stderr)
-                }
+        if isActive, shouldBeActive {
+            if maxEDR > 1.0, let screen = NSScreen.main {
+                // Resize the existing overlay to match the new screen layout
+                // instead of tearing down and recreating (which causes a flash)
+                overlayWindow?.setFrame(screen.frame, display: false)
+                boostView?.frame = screen.frame
+                fputs("Display changed — XDR resized\n", stderr)
+            } else {
+                deactivate()
             }
         }
     }
@@ -251,9 +260,17 @@ class XDRApp: NSObject, NSApplicationDelegate {
         boostView.wantsLayer = true
         window.contentView = boostView
         window.contentView?.layer?.compositingFilter = "multiply"
+
+        // Start invisible, reveal only after Metal renders the first frame
+        // to prevent a flash of transparent/black content
+        window.alphaValue = 0
         window.orderFrontRegardless()
         overlayWindow = window
         self.boostView = boostView
+
+        boostRenderer?.onFirstFrame = { [weak window] in
+            window?.alphaValue = 1
+        }
 
         isActive = true
         statusItem.button?.title = "☀︎"
