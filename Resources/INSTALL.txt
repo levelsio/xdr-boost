@@ -1,0 +1,17 @@
+XDR Boost
+
+1. Drag XDR Boost.app into Applications.
+2. Eject this disk image and open XDR Boost from Applications.
+3. Click the sun in the menu bar and choose Turn On or a brightness preset.
+
+The app starts with boost off. On macOS 27 or newer, the app uses gamma mode;
+start with 1.10 — Low. On older macOS versions, it uses the original multiply
+overlay. Quit from the sun menu to restore the display.
+
+This build is signed locally, not notarized by Apple. If macOS blocks a copy
+downloaded from the internet, review it in System Settings > Privacy & Security
+and use Open Anyway only if you trust its source.
+
+Supported hardware: MacBook Pro with a Liquid Retina XDR display.
+The app does not automatically start at login. It can be added manually in
+System Settings > General > Login Items.

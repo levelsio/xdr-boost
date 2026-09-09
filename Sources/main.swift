@@ -6,13 +6,21 @@ import Carbon.HIToolbox
 if CommandLine.arguments.contains("--kill") || CommandLine.arguments.contains("-k") {
     let pipe = Pipe()
     let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-    proc.arguments = ["-f", "xdr-boost"]
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    proc.arguments = ["-u", String(getuid()), "-x", "xdr-boost"]
     proc.standardOutput = pipe
-    proc.standardError = pipe
-    try? proc.run()
+    proc.standardError = FileHandle.standardError
+    do { try proc.run() } catch {
+        fputs("Could not find running instances: \(error)\n", stderr); exit(1)
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     proc.waitUntilExit()
-    fputs("All xdr-boost instances killed\n", stderr)
+    var count = 0
+    for value in String(decoding: data, as: UTF8.self).split(whereSeparator: { $0.isWhitespace }) {
+        guard let pid = Int32(value), pid != getpid() else { continue }
+        if kill(pid, SIGTERM) == 0 { count += 1 }
+    }
+    fputs("Sent stop request to \(count) xdr-boost instance(s) owned by this user\n", stderr)
     exit(0)
 }
 
@@ -42,6 +50,12 @@ class XDRApp: NSObject, NSApplicationDelegate {
     var shouldBeActive = false  // tracks user intent across sleep/lock cycles
     var boostLevel: Double = 2.0
     var maxEDR: CGFloat = 1.0
+    let usesGamma = CommandLine.arguments.contains("--gamma") ||
+        (Bundle.main.bundleURL.pathExtension == "app" && ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27)
+    var gammaSession: GammaSession?
+    var activeScreenFrame: NSRect = .zero
+    var activeDisplayID: CGDirectDisplayID?
+    var signalSources: [DispatchSourceSignal] = []
     var hotkeyRef: EventHotKeyRef?
     var watchdogTimer: Timer?
 
@@ -53,6 +67,17 @@ class XDRApp: NSObject, NSApplicationDelegate {
     var shortcutItem: NSMenuItem!
     var boostItems: [NSMenuItem] = []
 
+    func displayID(_ screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    var targetScreen: NSScreen? {
+        if let id = activeDisplayID {
+            return NSScreen.screens.first { displayID($0) == id }
+        }
+        return NSScreen.main
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let dev = MTLCreateSystemDefaultDevice() else {
             fputs("No Metal device\n", stderr); exit(1)
@@ -63,17 +88,30 @@ class XDRApp: NSObject, NSApplicationDelegate {
             fputs("Display doesn't support XDR\n", stderr); exit(1)
         }
 
-        if CommandLine.arguments.count > 1, let v = Double(CommandLine.arguments[1]) {
-            boostLevel = min(max(v, 1.0), Double(maxEDR))
+        if usesGamma { boostLevel = 1.1 }
+        if let raw = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("--") }), let v = Double(raw) {
+            guard v.isFinite else { fputs("Brightness must be finite\n", stderr); exit(1) }
+            if usesGamma && !(1.0...1.6).contains(v) {
+                fputs("Gamma gain must be between 1.0 and 1.6\n", stderr); exit(1)
+            }
+            boostLevel = usesGamma ? v : min(max(v, 1.0), Double(maxEDR))
         }
 
         setupStatusBar()
         registerGlobalHotkey()
         observeSleepWake()
         observeScreenshots()
+        for sig in [SIGINT, SIGTERM] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { [weak self] in self?.quit() }
+            source.resume()
+            signalSources.append(source)
+        }
         fputs("XDR Boost ready — click menu bar icon or press Ctrl+Option+Cmd+V to toggle\n", stderr)
         fputs("Emergency kill: run `xdr-boost --kill` or press Ctrl+Option+Cmd+V\n", stderr)
         fputs("Max EDR: \(maxEDR)x\n", stderr)
+        if usesGamma { fputs("Gamma mode — gains are table factors, not measured nits multipliers\n", stderr) }
     }
 
     // MARK: - Global Hotkey (Ctrl+Option+Cmd+V)
@@ -126,11 +164,16 @@ class XDRApp: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        let levelHeader = NSMenuItem(title: "Brightness Level", action: nil, keyEquivalent: "")
+        let levelHeader = NSMenuItem(title: usesGamma ? "Gamma Gain" : "Brightness Level", action: nil, keyEquivalent: "")
         levelHeader.isEnabled = false
         menu.addItem(levelHeader)
 
-        let levels: [(String, Double)] = [
+        let levels: [(String, Double)] = usesGamma ? [
+            ("1.10 — Low", 1.1),
+            ("1.25 — Medium", 1.25),
+            ("1.50 — High", 1.5),
+            ("1.60 — Maximum", 1.6),
+        ] : [
             ("1.5x — Subtle", 1.5),
             ("2.0x — Normal", 2.0),
             ("3.0x — Bright", 3.0),
@@ -166,7 +209,13 @@ class XDRApp: NSObject, NSApplicationDelegate {
         // Watchdog: every 3 seconds, check if XDR should be on but overlay is dead
         // This handles sleep/wake, lid close/open, lock/unlock — all of them
         watchdogTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            guard let self = self, self.shouldBeActive, !self.suppressedForScreenshot else { return }
+            guard let self = self else { return }
+            if !self.isActive, let session = self.gammaSession {
+                guard session.restore() else { return }
+                self.gammaSession = nil
+                self.toggleItem.title = "Turn On"
+            }
+            guard self.shouldBeActive, !self.suppressedForScreenshot else { return }
 
             if let window = self.overlayWindow {
                 // Window exists — just make sure it's visible and in front
@@ -187,24 +236,24 @@ class XDRApp: NSObject, NSApplicationDelegate {
     }
 
     @objc func handleDisplayChange() {
-        maxEDR = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+        maxEDR = targetScreen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
         if isActive {
-            guard let screen = NSScreen.main, let window = overlayWindow else { return }
+            guard let screen = targetScreen else { deactivate(); return }
 
             // Only tear down / recreate when the screen frame actually changed
             // (resolution or arrangement change). Brightness changes just update EDR
             // headroom and should NOT destroy the overlay.
-            if window.frame != screen.frame {
+            if activeScreenFrame != screen.frame || maxEDR <= 1 {
                 deactivate()
                 if maxEDR > 1.0 && shouldBeActive {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                        self?.activate()
+                        guard let self = self, self.shouldBeActive, !self.isActive else { return }
+                        self.activate()
                         fputs("Display changed — XDR refreshed\n", stderr)
                     }
                 }
             } else {
-                boostLevel = min(boostLevel, Double(maxEDR))
-                fputs("Display params changed — maxEDR: \(maxEDR)x\n", stderr)
+                if !usesGamma { boostLevel = min(boostLevel, Double(maxEDR)) }
             }
         }
     }
@@ -302,6 +351,14 @@ class XDRApp: NSObject, NSApplicationDelegate {
     // MARK: - Toggle
 
     @objc func toggleXDR() {
+        if !isActive, let pending = gammaSession {
+            shouldBeActive = false
+            if pending.restore() {
+                gammaSession = nil
+                toggleItem.title = "Turn On"
+            }
+            return
+        }
         if isActive {
             shouldBeActive = false
             deactivate()
@@ -317,6 +374,14 @@ class XDRApp: NSObject, NSApplicationDelegate {
             item.state = (item.tag == sender.tag) ? .on : .off
         }
         if isActive, let view = boostView {
+            if usesGamma {
+                if gammaSession?.apply(gain: Float(boostLevel)) != true {
+                    fputs("Could not set display gamma table\n", stderr)
+                    shouldBeActive = false
+                    deactivate()
+                }
+                return
+            }
             // Update in-place — no teardown, no flash
             view.clearColor = MTLClearColor(red: boostLevel, green: boostLevel, blue: boostLevel, alpha: 1.0)
             view.draw()  // force immediate frame so there's no black gap
@@ -329,9 +394,28 @@ class XDRApp: NSObject, NSApplicationDelegate {
     // MARK: - XDR Overlay
 
     func activate() {
-        guard let screen = NSScreen.main else { return }
+        guard !isActive, let screen = targetScreen else { return }
+        let id = displayID(screen)
+        if usesGamma {
+            if let pending = gammaSession {
+                guard pending.restore() else {
+                    fputs("Waiting to restore the previous display gamma before reactivating\n", stderr)
+                    return
+                }
+                gammaSession = nil
+            }
+            guard let session = GammaSession(display: id) else {
+                fputs("Could not capture unboosted gamma; turn off other gamma/brightness apps first\n", stderr)
+                shouldBeActive = false
+                return
+            }
+            gammaSession = session
+        }
+        activeDisplayID = id
+        activeScreenFrame = screen.frame
 
-        let frame = screen.frame
+        // The small EDR trigger keeps desktop pixels visible in gamma mode.
+        let frame = usesGamma ? NSRect(x: screen.frame.minX, y: screen.frame.minY, width: 8, height: 8) : screen.frame
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.level = .screenSaver
         window.backgroundColor = .clear
@@ -339,18 +423,20 @@ class XDRApp: NSObject, NSApplicationDelegate {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.hidesOnDeactivate = false
-        // NOTE: Do NOT set sharingType = .none here. The multiply compositing filter
+        if usesGamma { window.sharingType = .none }
+        // Multiply mode must not use sharingType = .none. Its compositing filter
         // is still applied during screen capture, and multiplying by an excluded (black)
         // window makes the entire screenshot/screen go black.
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
 
         // Single MTKView that both triggers EDR and provides the boost
-        let boostView = MTKView(frame: frame, device: device)
+        let boostView = MTKView(frame: NSRect(origin: .zero, size: frame.size), device: device)
         boostView.colorPixelFormat = .rgba16Float
         boostView.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
         boostView.layer?.isOpaque = false
         boostView.preferredFramesPerSecond = 10
-        boostView.clearColor = MTLClearColor(red: boostLevel, green: boostLevel, blue: boostLevel, alpha: 1.0)
+        let value = usesGamma ? Double(screen.maximumPotentialExtendedDynamicRangeColorComponentValue) : boostLevel
+        boostView.clearColor = MTLClearColor(red: value, green: value, blue: value, alpha: 1.0)
         if let layer = boostView.layer as? CAMetalLayer {
             layer.wantsExtendedDynamicRangeContent = true
         }
@@ -361,10 +447,17 @@ class XDRApp: NSObject, NSApplicationDelegate {
         // the desktop content BEHIND the window, not within it
         boostView.wantsLayer = true
         window.contentView = boostView
-        window.contentView?.layer?.compositingFilter = "multiply"
+        if !usesGamma { window.contentView?.layer?.compositingFilter = "multiply" }
         window.orderFrontRegardless()
         overlayWindow = window
         self.boostView = boostView
+
+        if usesGamma && gammaSession?.apply(gain: Float(boostLevel)) != true {
+            fputs("Could not set display gamma table\n", stderr)
+            shouldBeActive = false
+            deactivate()
+            return
+        }
 
         isActive = true
         statusItem.button?.title = "☀︎"
@@ -373,20 +466,39 @@ class XDRApp: NSObject, NSApplicationDelegate {
     }
 
     func deactivate() {
+        if gammaSession?.restore() != false { gammaSession = nil }
         overlayWindow?.orderOut(nil)
         overlayWindow = nil
         boostView = nil
         boostRenderer = nil
+        activeDisplayID = nil
 
         isActive = false
         statusItem.button?.title = "☀"
-        toggleItem.title = "Turn On"
+        toggleItem.title = gammaSession == nil ? "Turn On" : "Retry Display Restoration"
         fputs("XDR OFF\n", stderr)
     }
 
     @objc func quit() {
+        shouldBeActive = false
         deactivate()
+        guard gammaSession == nil else {
+            fputs("Display restoration failed; keeping the app running to retry. Choose Quit again after the display returns.\n", stderr)
+            return
+        }
+        watchdogTimer?.invalidate()
+        screenshotRestoreTimer?.invalidate()
         NSApp.terminate(nil)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        shouldBeActive = false
+        deactivate()
+        return gammaSession == nil ? .terminateNow : .terminateCancel
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        gammaSession?.restore()
     }
 }
 
@@ -394,6 +506,6 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let del = XDRApp()
 app.delegate = del
-signal(SIGINT) { _ in exit(0) }
-signal(SIGTERM) { _ in exit(0) }
+// Dispatch signal sources above restore gamma on the main queue. CoreGraphics
+// must not be called from a POSIX signal handler.
 app.run()
