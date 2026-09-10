@@ -6,17 +6,12 @@ CODE_SIGN_IDENTITY ?= -
 ARCH ?= $(shell uname -m)
 SWIFT_TARGET ?= $(ARCH)-apple-macos12.0
 
-.PHONY: build test app dmg install uninstall clean launch-agent remove-agent
+.PHONY: build app dmg install uninstall clean launch-agent remove-agent
 
 build:
 	@mkdir -p $(BUILD_DIR)
 	swiftc -target $(SWIFT_TARGET) -O -o $(BUILD_DIR)/$(BINARY) Sources/main.swift Sources/GammaTable.swift \
 		-framework Cocoa -framework MetalKit -framework Metal
-
-test:
-	@mkdir -p $(BUILD_DIR)
-	swiftc -o $(BUILD_DIR)/gamma-tests Sources/GammaTable.swift Tests/main.swift -framework CoreGraphics
-	$(BUILD_DIR)/gamma-tests
 
 app: build
 	@mkdir -p "$(APP_DIR)/Contents/MacOS" "$(APP_DIR)/Contents/Resources"

@@ -112,19 +112,6 @@ make remove-agent
 sudo make uninstall
 ```
 
-## Tests
-
-Run:
-
-```sh
-make test
-```
-
-All 19 tests pass.
-Hardware tests used one built-in XDR display with macOS 27.0 beta.
-Tests for sleep, wake and other displays are still necessary.
-The [test report](docs/gamma-mode.md) gives the results and limits.
-
 ## Licence
 
 [MIT](LICENSE).

@@ -3,8 +3,8 @@ import Foundation
 import Darwin
 
 struct GammaTable {
-    // On the tested XDR panel, 1024-entry writes clip at 1.0, while the
-    // 256-entry path retains extended values. Do not substitute native capacity.
+    // Use 256 entries for boosted writes to retain extended values.
+    // Save the native table separately for restoration.
     static let boostSampleCount: UInt32 = 256
     let red: [CGGammaValue]
     let green: [CGGammaValue]
@@ -38,20 +38,6 @@ struct GammaTable {
     }
 }
 
-protocol GammaAccess {
-    func capacity(display: CGDirectDisplayID) -> UInt32
-    func read(display: CGDirectDisplayID, capacity: UInt32) -> GammaTable?
-    func write(_ table: GammaTable, display: CGDirectDisplayID) -> CGError
-}
-
-struct SystemGammaAccess: GammaAccess {
-    func capacity(display: CGDirectDisplayID) -> UInt32 { CGDisplayGammaTableCapacity(display) }
-    func read(display: CGDirectDisplayID, capacity: UInt32) -> GammaTable? {
-        GammaTable.read(display: display, capacity: capacity)
-    }
-    func write(_ table: GammaTable, display: CGDirectDisplayID) -> CGError { table.write(display: display) }
-}
-
 private final class DisplayGammaLock {
     private let descriptor: Int32
 
@@ -77,31 +63,29 @@ final class GammaSession {
     let display: CGDirectDisplayID
     private let original: GammaTable
     private let baseline: GammaTable
-    private let access: GammaAccess
     private let ownership: DisplayGammaLock
     private var applied = false
 
-    init?(display: CGDirectDisplayID, access: GammaAccess = SystemGammaAccess()) {
+    init?(display: CGDirectDisplayID) {
         // Own the display before reading it, including when its calibration is
         // dimmed enough that an existing gain would still have endpoints <= 1.
         guard let ownership = DisplayGammaLock(display: display) else { return nil }
         // Save the full native table for restoration before presenting EDR.
-        let capacity = max(access.capacity(display: display), GammaTable.boostSampleCount)
-        guard let original = access.read(display: display, capacity: capacity),
-              let baseline = access.read(display: display, capacity: GammaTable.boostSampleCount),
+        let capacity = max(CGDisplayGammaTableCapacity(display), GammaTable.boostSampleCount)
+        guard let original = GammaTable.read(display: display, capacity: capacity),
+              let baseline = GammaTable.read(display: display, capacity: GammaTable.boostSampleCount),
               baseline.red.count == Int(GammaTable.boostSampleCount),
               original.isUnboosted, baseline.isUnboosted else { return nil }
         self.display = display
         self.original = original
         self.baseline = baseline
-        self.access = access
         self.ownership = ownership
     }
 
     @discardableResult
     func apply(gain: Float) -> Bool {
         guard gain.isFinite, (1...1.6).contains(gain) else { return false }
-        guard access.write(baseline.scaled(by: gain), display: display) == .success else { return false }
+        guard baseline.scaled(by: gain).write(display: display) == .success else { return false }
         applied = true
         return true
     }
@@ -111,7 +95,7 @@ final class GammaSession {
         guard applied else { return true }
         // Retain the snapshot and ownership on failure so callers can retry.
         // Never reset ColorSync on displays this session does not own.
-        guard access.write(original, display: display) == .success else { return false }
+        guard original.write(display: display) == .success else { return false }
         applied = false
         return true
     }
