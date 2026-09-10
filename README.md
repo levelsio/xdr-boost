@@ -1,133 +1,130 @@
 # xdr-boost
 
-Free and open-source XDR brightness booster for MacBook Pro. Like [Vivid](https://www.getvivid.app/), but free.
-
-Unlocks the full brightness of your Liquid Retina XDR display beyond the standard SDR limit. Your MacBook Pro can go up to 1600 nits — this tool lets you use it.
-
-## Features
-
-- Boosts screen brightness beyond the standard 500 nit SDR limit using XDR hardware
-- No white tint or washed-out colors — uses multiply compositing to preserve colors perfectly
-- Menu bar icon with brightness presets (1.5x, 2.0x, 3.0x, 4.0x)
-- Optional gamma-table mode for displays where the multiply overlay does not boost brightness
-- Global keyboard shortcut (**Ctrl+Option+Cmd+V**) to toggle from anywhere
-- Survives sleep/wake, lid close/open, and lock/unlock — brightness auto-restores
-- Starts with XDR off — rebooting always gives you a normal screen
-- Emergency kill switch (`xdr-boost --kill`) if anything goes wrong
-- Standalone binary or a macOS app bundle, with no third-party runtime dependencies
-- Launch agent for auto-start on login
-
-## How it works
-
-MacBook Pro displays can output up to 1600 nits, but macOS caps regular desktop content at ~500 nits. The extra brightness is reserved for HDR content.
-
-xdr-boost creates an invisible Metal overlay using `multiply` compositing with EDR (Extended Dynamic Range) values above 1.0. This triggers the display hardware to boost its backlight, making everything brighter while preserving colors perfectly — no white tint, no washed-out look.
-
-The optional `--gamma` mode presents a small 8×8 EDR trigger and scales the display's captured RGB transfer tables. It writes 256 entries without clamping them to SDR white and saves the full native table for restoration. This mode was tested on a built-in XDR display with macOS 27.0 beta; see [validation notes](docs/gamma-mode.md). The app bundle selects this mode by default on macOS 27 or newer. The command-line binary keeps the original multiply mode as its default.
+`xdr-boost` increases display brightness above the standard dynamic range (SDR) limit.
+It uses the Liquid Retina XDR display in a MacBook Pro.
 
 ## Requirements
 
-- MacBook Pro with Liquid Retina XDR display (M1 Pro/Max or later)
-- macOS 12.0+
+- MacBook Pro with a Liquid Retina XDR display
+- macOS 12 or later
+- Apple Command Line Tools to build from source
 
-## Install
+## Build from source
 
-### Application installer
+Run these commands in Terminal:
 
-Open `XDR-Boost.dmg`, drag **XDR Boost.app** into **Applications**, then eject the disk image and open the app. It appears as a sun in the menu bar and starts with boost off. On macOS 27 or newer, start with **1.10 — Low** or **1.25 — Medium**.
-
-To build the installer from source:
-
-```bash
-make dmg
-```
-
-This produces `.build/XDR Boost.app` and `.build/XDR-Boost.dmg` for the build machine's architecture. `make app` builds just the app. The app targets macOS 12 or newer; runtime validation of gamma mode is limited to the macOS 27 beta noted above.
-
-Builds are ad-hoc signed by default and are not notarized. A downloaded copy may require **System Settings → Privacy & Security → Open Anyway**, following [Apple's instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac). A maintainer can provide `CODE_SIGN_IDENTITY` when building; notarization is a separate release step. Building does not install the app or configure login startup.
-
-### Command-line build
-
-```bash
+```sh
 git clone https://github.com/levelsio/xdr-boost.git
 cd xdr-boost
 make build
 ```
 
-The binary will be at `.build/xdr-boost`.
+The executable is `.build/xdr-boost`.
 
-### Install to PATH
+## Install the app
 
-```bash
+To build the disk image, run:
+
+```sh
+make dmg
+```
+
+1. Open `.build/XDR-Boost.dmg`.
+2. Drag **XDR Boost.app** to **Applications**.
+3. Eject the disk image.
+4. Open **XDR Boost** from **Applications**.
+5. Select the sun icon in the menu bar.
+6. Select **Turn On**.
+
+The app starts with the brightness boost off.
+Each build uses the processor architecture of the build Mac.
+Use `make app` to build only the app.
+
+The default build uses a local signature.
+Apple notarisation is not part of this build.
+If macOS blocks the app, refer to [Apple's instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
+
+To start the app at login, add it to **Login Items** in **System Settings**.
+
+## Select a mode
+
+Multiply mode uses a Metal overlay to increase brightness.
+Gamma mode changes the gamma table that controls red, green and blue output.
+The app saves the initial table.
+It puts this table back when you stop the boost.
+
+The app uses gamma mode on macOS 27 or later.
+On earlier macOS versions, it uses multiply mode.
+The executable uses multiply mode by default.
+
+| Mode | Menu values | Default value |
+| --- | --- | --- |
+| Multiply | 1.5, 2.0, 3.0, 4.0 | 2.0 |
+| Gamma | 1.10, 1.25, 1.50, 1.60 | 1.10 |
+
+Gamma values are control factors.
+They do not show brightness in nits.
+
+To start multiply mode from Terminal, run:
+
+```sh
+./.build/xdr-boost
+```
+
+To start gamma mode at 1.25, run:
+
+```sh
+./.build/xdr-boost --gamma 1.25
+```
+
+Run only one brightness utility at a time.
+
+## Stop the boost
+
+Press **Ctrl+Option+Cmd+V** to switch the boost on or off.
+Select **Quit** in the sun menu to close the app.
+
+To stop the app from Terminal, run:
+
+```sh
+./.build/xdr-boost --kill
+```
+
+This command sends SIGTERM to the current user's app processes.
+Gamma mode puts the initial table back before the app stops.
+If this step fails, the app stays open and tries again.
+With SIGKILL, the app cannot put the initial table back.
+
+## Install the terminal command
+
+Run:
+
+```sh
 sudo make install
 ```
 
-### Start on login
+The command is available as `xdr-boost`.
 
-```bash
-sudo make install
-make launch-agent
-```
+To remove the terminal command, run:
 
-### Uninstall
-
-```bash
+```sh
 make remove-agent
 sudo make uninstall
 ```
 
-## Usage
+## Tests
 
-```bash
-# Run with menu bar icon (default 2x boost)
-xdr-boost
+Run:
 
-# Run with custom boost level
-xdr-boost 3.0
-
-# Gamma fallback (default gain 1.10)
-xdr-boost --gamma
-
-# Gamma fallback with a specific gain
-xdr-boost --gamma 1.25
+```sh
+make test
 ```
 
-Click the **☀** icon in your menu bar to:
-- Toggle XDR brightness on/off
-- Choose brightness level (1.5x, 2.0x, 3.0x, 4.0x)
-- Quit
+All 19 tests pass.
+Hardware tests used one built-in XDR display with macOS 27.0 beta.
+Tests for sleep, wake and other displays are still necessary.
+The [test report](docs/gamma-mode.md) gives the results and limits.
 
-Gamma mode offers gains of 1.10, 1.25, 1.50, and 1.60. These are transfer-table factors, not calibrated brightness or nits multipliers. Run only one brightness/gamma utility at a time. Gamma mode rejects tables with values already above SDR white and prevents another copy under the same user from taking over its display. Turning it off, quitting, or sending SIGINT/SIGTERM restores the captured native table. If restoration fails, the app keeps the snapshot and retries; it stays open instead of resetting other displays. A forced SIGKILL cannot run cleanup.
+## Licence
 
-### Keyboard shortcut
-
-**Ctrl+Option+Cmd+V** — toggle XDR brightness on/off from anywhere, no need to find the menu bar icon.
-
-### Emergency kill
-
-If something goes wrong and you can't see your screen:
-
-```bash
-# From terminal (even blind-type it)
-xdr-boost --kill
-
-# Or just
-pkill xdr-boost
-```
-
-The app always starts with XDR **off** — you have to manually turn it on. So rebooting will always give you a normal screen.
-
-### Sleep, lid close, and lock screen
-
-A common problem with XDR brightness apps is that closing your laptop or locking the screen kills the brightness boost, and it doesn't come back when you return. xdr-boost fixes this with a watchdog that automatically restores your brightness within a few seconds after:
-
-- Closing and reopening the laptop lid
-- Locking and unlocking the screen
-- Sleep and wake
-- Plugging/unplugging external displays
-
-Gamma mode still needs sleep/wake and external-display testing on more hardware.
-
-## License
-
-MIT
+[MIT](LICENSE).
