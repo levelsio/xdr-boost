@@ -1,13 +1,14 @@
 PREFIX ?= /usr/local
 BINARY = xdr-boost
 BUILD_DIR = .build
+MACOS_MIN = 12.0
 
 .PHONY: build install uninstall clean launch-agent remove-agent
 
 build:
 	@mkdir -p $(BUILD_DIR)
-	swiftc -O -o $(BUILD_DIR)/$(BINARY) Sources/main.swift \
-		-framework Cocoa -framework MetalKit -framework Metal
+	swiftc -O -target $(shell uname -m)-apple-macos$(MACOS_MIN) -o $(BUILD_DIR)/$(BINARY) Sources/*.swift \
+		-framework Cocoa -framework MetalKit -framework Metal -framework SwiftUI -framework IOKit
 
 install: build
 	install -d $(PREFIX)/bin
